@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Limits</title>
+<link rel="icon" href="data:,">
+<style>
+  :root {
+    --bg: #f6f6f4; --card: #ffffff; --text: #1d1d1b; --muted: #6b6b66; --line: #e4e4df;
+    --track: #ececE7; --ok: #2f8f5b; --warn: #c98a12; --hot: #c8412f;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #141413; --card: #1f1f1d; --text: #eceae4; --muted: #9a988f; --line: #2e2e2b;
+      --track: #2c2c29; --ok: #4fb67d; --warn: #e0a83a; --hot: #e2604c;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 980px; margin: 0 auto; padding: 28px 16px 48px; }
+  header { display: flex; justify-content: space-between; align-items: baseline; gap: 12px;
+           flex-wrap: wrap; margin-bottom: 18px; }
+  h1 { font-size: 20px; margin: 0; letter-spacing: -0.01em; }
+  #updated { color: var(--muted); font-size: 13px; }
+  #best { background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+          padding: 12px 16px; margin-bottom: 18px; }
+  #best b { font-weight: 600; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 14px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 16px; }
+  .head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 12px; }
+  .name { font-weight: 600; font-size: 16px; }
+  .meta { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }
+  .limit { margin: 10px 0; }
+  .row { display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 4px; }
+  .pct { font-variant-numeric: tabular-nums; font-weight: 600; }
+  .track { height: 8px; background: var(--track); border-radius: 4px; overflow: hidden; }
+  .fill { height: 100%; border-radius: 4px; background: var(--ok); transition: width .4s; }
+  .fill.warn { background: var(--warn); } .fill.hot { background: var(--hot); }
+  .reset { color: var(--muted); font-size: 12px; margin-top: 3px; }
+  .note { color: var(--muted); font-size: 12px; margin-top: 10px; }
+  .problem { color: var(--warn); font-size: 13px; }
+  .card.error .problem { color: var(--hot); }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>AI limits</h1>
+    <span id="updated">loading…</span>
+  </header>
+  <div id="best" hidden></div>
+  <div class="grid" id="grid"></div>
+</main>
+<script>
+const REFRESH_MS = 60_000;
+let fetchedAt = null;
+
+function level(p) { return p >= 95 ? "hot" : p >= 80 ? "warn" : ""; }
+
+function until(iso) {
+  const ms = new Date(iso) - Date.now();
+  if (ms <= 0) return "resetting now";
+  const m = Math.round(ms / 60000), d = Math.floor(m / 1440), h = Math.floor((m % 1440) / 60);
+  const left = d ? `${d}d ${h}h` : h ? `${h}h ${m % 60}m` : `${m}m`;
+  const when = new Date(iso).toLocaleString(undefined,
+    { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+  return `resets in ${left} · ${when}`;
+}
+
+function el(tag, cls, text) {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text != null) n.textContent = text;
+  return n;
+}
+
+function card(acc) {
+  const c = el("div", "card" + (acc.status === "error" ? " error" : ""));
+  const head = el("div", "head");
+  head.append(el("span", "name", acc.name),
+              el("span", "meta", [acc.tool, acc.plan].filter(Boolean).join(" · ")));
+  c.append(head);
+  if (acc.status !== "ok") { c.append(el("div", "problem", acc.error)); return c; }
+  if (!acc.limits.length) c.append(el("div", "note", "No limits reported"));
+  for (const l of acc.limits) {
+    const p = Math.round(l.percent ?? 0);
+    const box = el("div", "limit");
+    const row = el("div", "row");
+    row.append(el("span", null, l.label), el("span", "pct", `${p}%`));
+    const track = el("div", "track"), fill = el("div", "fill " + level(p));
+    fill.style.width = Math.min(p, 100) + "%";
+    track.append(fill);
+    box.append(row, track);
+    if (l.resets_at) box.append(el("div", "reset", until(l.resets_at)));
+    c.append(box);
+  }
+  if (acc.note) c.append(el("div", "note", acc.note));
+  if (acc.as_of && fetchedAt - new Date(acc.as_of) > 60_000) {
+    const t = new Date(acc.as_of).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+    c.append(el("div", "note", `as of ${t} — provider busy, retrying later`));
+  }
+  return c;
+}
+
+function mostHeadroom(accounts) {
+  // An account is only as free as its tightest limit.
+  return accounts.filter(a => a.tool === "claude" && a.status === "ok" && a.limits.length)
+    .map(a => ({ name: a.name, used: Math.max(...a.limits.map(l => l.percent ?? 0)) }))
+    .sort((x, y) => x.used - y.used);
+}
+
+async function load() {
+  try {
+    const data = await (await fetch("/api/usage", { cache: "no-store" })).json();
+    fetchedAt = new Date(data.fetched_at);
+    document.getElementById("grid").replaceChildren(...data.accounts.map(card));
+    const best = mostHeadroom(data.accounts), box = document.getElementById("best");
+    box.hidden = !best.length;
+    if (best.length) {
+      box.replaceChildren("Most Claude headroom now: ", el("b", null, best[0].name),
+        ` (${100 - Math.round(best[0].used)}% left)` +
+        (best.length > 1 ? ` · then ${best.slice(1).map(b => b.name).join(", ")}` : ""));
+    }
+  } catch (e) {
+    document.getElementById("updated").textContent = "server unreachable — retrying";
+  }
+  tick();
+}
+
+function tick() {
+  if (!fetchedAt) return;
+  const s = Math.round((Date.now() - fetchedAt) / 1000);
+  document.getElementById("updated").textContent =
+    `updated ${s < 60 ? s + "s" : Math.round(s / 60) + "m"} ago · checks every 3 minutes`;
+}
+
+load();
+setInterval(load, REFRESH_MS);
+setInterval(tick, 5000);
+</script>
+</body>
+</html>

@@ -1,0 +1,12 @@
+{
+  "port": 8787,
+  "threshold": 95,
+  "claude": [
+    {"name": "personal", "dir": "~/.claude"},
+    {"name": "work", "dir": "~/.claude-work"}
+  ],
+  "codex": [
+    {"name": "codex", "dir": "~/.codex"}
+  ],
+  "claude_args": []
+}

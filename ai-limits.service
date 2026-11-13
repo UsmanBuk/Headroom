@@ -1,0 +1,9 @@
+[Unit]
+Description=Local AI usage-limits dashboard (http://127.0.0.1:8787)
+
+[Service]
+ExecStart=/usr/bin/python3 %h/.local/share/ai-limits/server.py
+Restart=on-failure
+
+[Install]
+WantedBy=default.target

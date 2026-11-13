@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# claude-auto <profile> [claude args...]
+# Runs Claude Code on a profile; when the autoswitch hook asks (account at the threshold or
+# rate-limited), reopens the same chat on the next account. Profiles, their order and the
+# threshold live in ~/.config/ai-limits/config.json.
+set -u
+AS="$(dirname "$(readlink -f "$0")")/autoswitch.py"
+
+run_profile() {
+  local p=$1 dir flags; shift
+  { read -r dir; mapfile -t flags; } < <(python3 "$AS" launch "$p")
+  # The default profile keeps its .claude.json in $HOME, so it must run without CLAUDE_CONFIG_DIR.
+  if [[ $dir == "$HOME/.claude" ]]; then
+    env -u CLAUDE_CONFIG_DIR claude "${flags[@]}" "$@"
+  else
+    CLAUDE_CONFIG_DIR="$dir" claude "${flags[@]}" "$@"
+  fi
+}
+
+[[ $# -ge 1 ]] || { echo "usage: claude-auto <profile> [claude args...]" >&2; exit 2; }
+profile=$(python3 "$AS" start "$@") || exit 2; shift
+export CLAUDE_AUTO_PID=$$
+# mktemp makes a fresh private directory, so nobody else can plant a switch marker in it.
+CLAUDE_AUTO_DIR=$(mktemp -d "${XDG_RUNTIME_DIR:-/tmp}/claude-auto.XXXXXX") || exit 1
+export CLAUDE_AUTO_DIR
+trap 'rm -rf "$CLAUDE_AUTO_DIR"' EXIT
+trap : INT  # Ctrl+C belongs to Claude; a trap (not ignore) leaves the child's default intact
+
+args=("$@")
+while :; do
+  export CLAUDE_AUTO_PROFILE=$profile
+  run_profile "$profile" "${args[@]}"
+  status=$?
+  marker="$CLAUDE_AUTO_DIR/switch"
+  [[ -f $marker ]] || exit "$status"
+  read -r session next model ended reason < "$marker"
+  rm -f "$marker"
+  # Claude was killed mid-screen: leave the alt screen, show the cursor, turn off mouse/paste modes.
+  printf '\e[?1049l\e[?25h\e[?1000l\e[?1002l\e[?1003l\e[?1006l\e[?2004l'
+  stty sane 2>/dev/null
+  clear
+  echo "↻ ${reason} — switched ${profile} → ${next}"
+  profile=$next
+  args=(--resume "$session")
+  [[ $model != - ]] && args+=(--model "$model")
+  # A reply refused by the limit gets picked up again; a finished one waits for the user.
+  [[ $ended == cut ]] && args+=("Your last reply was cut off by a usage limit and this chat has moved to another account. Continue exactly where you left off.")
+done
