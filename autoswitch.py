@@ -17,12 +17,14 @@ import subprocess
 import sys
 import time
 import urllib.request
+from datetime import datetime, timezone
 from pathlib import Path
 
 from config import CLAUDE_ARGS, CLAUDE_PROFILES, PORT, THRESHOLD
 
 ORDER = [name for name, _ in CLAUDE_PROFILES]
 DASHBOARD = f"http://127.0.0.1:{PORT}/api/usage"
+LAST_GOOD = Path(__file__).resolve().parent / "last_good.json"
 
 
 def accounts():
@@ -31,12 +33,36 @@ def accounts():
     return {a["name"]: a for a in data["accounts"] if a["tool"] == "claude"}
 
 
+def last_known(name):
+    """The dashboard's last reading of an account. An idle account's login token
+    expires after about 8 hours, so its live usage can't be read; the last reading is
+    a fair guess (only use of that account raises it, and starting Claude there
+    renews the token). A limit whose reset time has passed since counts as 0."""
+    try:
+        entry = json.loads(LAST_GOOD.read_text()).get(name)
+    except (OSError, ValueError):
+        return None
+    if not entry:
+        return None
+    now = datetime.now(timezone.utc)
+    limits = [
+        {**l, "percent": 0}
+        if l.get("resets_at") and datetime.fromisoformat(l["resets_at"]) < now
+        else l
+        for l in entry["limits"]
+    ]
+    return {**entry, "limits": limits}
+
+
 def used(account, model):
     """Highest percentage among the limits that would block this model.
 
     A limit either covers every model or names one ("Fable"); a named limit counts
-    when that name appears in the model in use ("claude-fable-5-2", "--model fable")."""
-    if account is None or account["status"] != "ok":
+    when that name appears in the model in use ("claude-fable-5-2", "--model fable").
+    An account the dashboard can't read right now falls back to its last reading."""
+    if account is not None and account["status"] != "ok":
+        account = last_known(account["name"])
+    if account is None:
         return 100.0
     relevant = [
         l

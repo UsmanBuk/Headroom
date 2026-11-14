@@ -24,6 +24,7 @@ A few rules keep it from doing damage:
 
 - It never closes Claude while a background command or a subagent is running. It waits for the first reply after that work finishes.
 - If the dashboard is down or has no reading for the account, nothing switches.
+- A spare account nobody has opened for about 8 hours has an expired login token, so the dashboard can't read it. When choosing where to switch, `autoswitch.py` uses that account's last good reading instead, counting any limit whose reset time has passed as 0. Starting Claude on it renews the token. If the old reading was wrong and the account is full, the rate-limit failure moves the chat on to the next account.
 - After a normal reply, the reopened chat waits for you. After a reply the limit cut off, it sends a message asking Claude to continue.
 - The hooks do nothing in a Claude session that was not started by `claude-auto`.
 
