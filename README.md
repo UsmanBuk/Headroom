@@ -1,4 +1,4 @@
-# LimitlessAi
+# Headroom
 
 A local dashboard that shows how much of your Claude Code and Codex usage limits you have left on each account, and a launcher that moves a Claude Code chat to your next account when the current one runs out.
 
@@ -37,7 +37,7 @@ A few rules keep it from doing damage:
 ## Install
 
 ```bash
-git clone https://github.com/UsmanBuk/LimitlessAi && cd LimitlessAi
+git clone https://github.com/UsmanBuk/Headroom && cd Headroom
 ./install.sh
 ```
 
