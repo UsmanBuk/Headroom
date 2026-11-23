@@ -7,13 +7,13 @@ set -u
 AS="$(dirname "$(readlink -f "$0")")/autoswitch.py"
 
 run_profile() {
-  local p=$1 dir flags; shift
-  { read -r dir; mapfile -t flags; } < <(python3 "$AS" launch "$p")
+  local p=$1 dir flag flags=(); shift
+  { read -r dir; while IFS= read -r flag; do flags+=("$flag"); done; } < <(python3 "$AS" launch "$p")
   # The default profile keeps its .claude.json in $HOME, so it must run without CLAUDE_CONFIG_DIR.
   if [[ $dir == "$HOME/.claude" ]]; then
-    env -u CLAUDE_CONFIG_DIR claude "${flags[@]}" "$@"
+    env -u CLAUDE_CONFIG_DIR claude ${flags[@]+"${flags[@]}"} "$@"
   else
-    CLAUDE_CONFIG_DIR="$dir" claude "${flags[@]}" "$@"
+    CLAUDE_CONFIG_DIR="$dir" claude ${flags[@]+"${flags[@]}"} "$@"
   fi
 }
 
@@ -29,7 +29,7 @@ trap : INT  # Ctrl+C belongs to Claude; a trap (not ignore) leaves the child's d
 args=("$@")
 while :; do
   export CLAUDE_AUTO_PROFILE=$profile
-  run_profile "$profile" "${args[@]}"
+  run_profile "$profile" ${args[@]+"${args[@]}"}
   status=$?
   marker="$CLAUDE_AUTO_DIR/switch"
   [[ -f $marker ]] || exit "$status"

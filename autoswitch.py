@@ -92,30 +92,45 @@ def transcript_model(path):
     return found[-1] if found else ""
 
 
-def claude_pid():
+def processes():
+    """pid -> (parent pid, command line) for every process; ps works on Linux and macOS."""
+    out = subprocess.run(
+        ["ps", "-eo", "pid=,ppid=,args="], capture_output=True, text=True
+    ).stdout
+    procs = {}
+    for line in out.splitlines():
+        parts = line.split(None, 2)
+        if len(parts) >= 2:
+            procs[int(parts[0])] = (int(parts[1]), parts[2] if len(parts) > 2 else "")
+    return procs
+
+
+def ancestors(procs):
+    """This hook's own chain of parents, nearest first."""
+    chain, pid = [], os.getppid()
+    while pid > 1 and pid in procs and pid not in chain:
+        chain.append(pid)
+        pid = procs[pid][0]
+    return chain
+
+
+def claude_pid(procs):
     """The Claude process is the ancestor whose parent is the launcher."""
-    launcher, pid = os.environ["CLAUDE_AUTO_PID"], os.getppid()
-    while pid > 1:
-        with open(f"/proc/{pid}/stat") as f:
-            ppid = f.read().rsplit(")", 1)[1].split()[1]
-        if ppid == launcher:
+    launcher = int(os.environ["CLAUDE_AUTO_PID"])
+    for pid in ancestors(procs):
+        if procs[pid][0] == launcher:
             return pid
-        pid = int(ppid)
     return None
 
 
-def background_work(pid, transcript_path):
+def background_work(procs, pid, transcript_path):
     """What closing Claude now would kill, or None. Hooks fire after the turn's own
     commands finish, so a shell-snapshot bash child left over is a background job;
     a subagent transcript written in the last 5 minutes means a subagent may be live."""
-    for stat in Path("/proc").glob("[0-9]*/stat"):
-        try:
-            if stat.read_text().rsplit(")", 1)[1].split()[1] != str(pid):
-                continue
-            if b"shell-snapshots/snapshot-" in (stat.parent / "cmdline").read_bytes():
-                return "a background command"
-        except (OSError, IndexError):
-            continue
+    own = ancestors(procs)  # the shell running this hook is not background work
+    for child, (ppid, command) in procs.items():
+        if ppid == pid and child not in own and "shell-snapshots/snapshot-" in command:
+            return "a background command"
     subagents = Path(transcript_path).with_suffix("") / "subagents"
     if any(time.time() - f.stat().st_mtime < 300 for f in subagents.glob("*.jsonl")):
         return "a subagent"
@@ -182,10 +197,11 @@ def hook():
             )
         )
         return
-    pid = claude_pid()
+    procs = processes()
+    pid = claude_pid(procs)
     if pid is None:
         return
-    busy = background_work(pid, event.get("transcript_path", ""))
+    busy = background_work(procs, pid, event.get("transcript_path", ""))
     if busy:
         msg = f"{reason} — not switching to {nxt} yet: {busy} is still running. It will switch at the first reply after that finishes."
         print(json.dumps({"systemMessage": msg}))

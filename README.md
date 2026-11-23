@@ -16,7 +16,7 @@ I built it because I got tired of checking each account by hand and restarting c
 
 ## How it works
 
-`server.py` reads the login token each profile already has on disk (`.credentials.json` for Claude Code, `auth.json` for Codex) and asks the provider's usage endpoint. It asks each account at most once every 3 minutes. If the provider answers HTTP 429 it waits 10 minutes for that account and shows the last good reading. It never refreshes a token. Refresh tokens are single-use, so refreshing one here could log a running session out.
+`server.py` reads the login token each profile already has (`.credentials.json` for Claude Code on Linux, the Keychain on macOS, `auth.json` for Codex) and asks the provider's usage endpoint. It asks each account at most once every 3 minutes. If the provider answers HTTP 429 it waits 10 minutes for that account and shows the last good reading. It never refreshes a token. Refresh tokens are single-use, so refreshing one here could log a running session out.
 
 `autoswitch.py` runs as a Claude Code `Stop` and `StopFailure` hook. It asks the dashboard for the current numbers. If the account is at the threshold, it writes a small marker file and ends the Claude process. `claude-auto` sees the marker and runs `claude --resume <session> --model <model>` on the next account.
 
@@ -30,7 +30,7 @@ A few rules keep it from doing damage:
 
 ## Requirements
 
-- Linux with systemd. On macOS, Claude Code keeps the login in the Keychain instead of `.credentials.json`, so the dashboard cannot read it as written.
+- Linux with systemd, or macOS.
 - Python 3.8 or later. No packages to install.
 - Claude Code, logged in once per account.
 
@@ -41,7 +41,7 @@ git clone https://github.com/UsmanBuk/Headroom && cd Headroom
 ./install.sh
 ```
 
-The script copies the files to `~/.local/share/ai-limits`, links `claude-auto` into `~/.local/bin`, and starts the dashboard as a systemd user service. It creates `~/.config/ai-limits/config.json` from the example if you have none.
+The script copies the files to `~/.local/share/ai-limits`, links `claude-auto` into `~/.local/bin`, and starts the dashboard as a systemd user service (a launchd agent on macOS). It creates `~/.config/ai-limits/config.json` from the example if you have none.
 
 Then do three things.
 
@@ -72,7 +72,7 @@ Edit `~/.config/ai-limits/config.json`:
 | `port` | Dashboard port. Default 8787. |
 | `claude_args` | Arguments added to every `claude` launch, including the relaunch after a switch. |
 
-Run `systemctl --user restart ai-limits` after changing it.
+Run `systemctl --user restart ai-limits` after changing it (on macOS: `launchctl kickstart -k gui/$(id -u)/ai-limits`).
 
 ### 2. Give each account a profile that shares chat history
 
@@ -128,6 +128,13 @@ work() { claude-auto work "$@"; }
 ```bash
 systemctl --user disable --now ai-limits
 rm -rf ~/.local/share/ai-limits ~/.config/ai-limits ~/.config/systemd/user/ai-limits.service ~/.local/bin/claude-auto
+```
+
+On macOS:
+
+```bash
+launchctl bootout gui/$(id -u)/ai-limits
+rm -rf ~/.local/share/ai-limits ~/.config/ai-limits ~/Library/LaunchAgents/ai-limits.plist ~/.local/bin/claude-auto
 ```
 
 Then remove the two hook entries from `settings.json`.

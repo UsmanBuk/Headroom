@@ -5,7 +5,10 @@ Reads each profile's existing login token and asks the provider's usage endpoint
 Tokens are only read, never refreshed: refresh tokens are single-use, so refreshing
 here could race a running session and log that profile out.
 """
+import hashlib
 import json
+import subprocess
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -41,8 +44,27 @@ def window_label(seconds):
     return {5: "5-hour", 168: "Weekly"}.get(hours, f"{hours}h window")
 
 
+def claude_credentials(config_dir):
+    """The profile's stored login. Linux keeps it in .credentials.json; macOS keeps it
+    in the Keychain, under a service name that carries a hash of the config dir for
+    every profile but the default one."""
+    cred_file = config_dir / ".credentials.json"
+    if cred_file.exists() or sys.platform != "darwin":
+        return cred_file.read_text()
+    service = "Claude Code-credentials"
+    if config_dir != Path.home() / ".claude":
+        service += "-" + hashlib.sha256(str(config_dir).encode()).hexdigest()[:8]
+    return subprocess.run(
+        ["security", "find-generic-password", "-s", service, "-w"],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=15,
+    ).stdout
+
+
 def claude_account(name, config_dir):
-    oauth = json.loads((config_dir / ".credentials.json").read_text())["claudeAiOauth"]
+    oauth = json.loads(claude_credentials(config_dir))["claudeAiOauth"]
     usage = get_json(
         "https://api.anthropic.com/api/oauth/usage",
         {
