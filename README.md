@@ -2,13 +2,17 @@
 
 A local dashboard that shows how much of your Claude Code and Codex usage limits you have left on each account, and a launcher that moves a Claude Code chat to your next account when the current one runs out.
 
-![Dashboard with one card per account](screenshot.png)
+![A chat moving from an account that ran out of Fable usage to one with room](demo.gif)
 
-The screenshot uses sample data.
+A real switch, recorded on macOS: the `work` account had used all of its weekly Fable limit, so the chat reopened on `personal` and Claude finished the reply. Full-size video: [demo.mp4](demo.mp4).
 
 ## What you get
 
 **The dashboard.** `http://127.0.0.1:8787` shows one card per account with its 5-hour, weekly and per-model limits and when each one resets.
+
+![Dashboard with one card per account](screenshot.png)
+
+The screenshot uses sample data.
 
 **`claude-auto <profile>`.** It starts Claude Code on that account. When the account reaches 95% of a limit that applies to the model you are using, or a reply fails on a rate limit, it closes Claude after the reply and reopens the same chat on the next account that still has room. If the account you asked for is already full, it starts on the next one.
 
