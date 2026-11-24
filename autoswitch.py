@@ -4,6 +4,7 @@
   autoswitch.py start <profile>   print the profile to start on (stderr: why, if changed)
   autoswitch.py launch <profile>  print its config dir, then the extra claude args, one per line
   autoswitch.py hook              Stop / StopFailure hook; reads hook JSON on stdin
+  autoswitch.py watch <pid> <transcript>   finishes a switch the hook had to put off
 
 The hook only acts inside claude-auto (CLAUDE_AUTO_PID set). When the current account
 is at the threshold, or a reply died on a rate limit, it writes a marker for the
@@ -13,6 +14,7 @@ account. Usage comes from the local dashboard; if that is down, nothing switches
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import time
@@ -122,6 +124,34 @@ def background_work(pid, transcript_path):
     return None
 
 
+def watch(pid, transcript_path):
+    """Finish a switch the hook put off. Background work can end without another
+    reply (e.g. a subagent dying on the same limit), so no hook would fire again."""
+    pid = int(pid)
+    adir = Path(os.environ["CLAUDE_AUTO_DIR"])
+    pending, marker = adir / "pending", adir / "switch"
+    config = Path(os.environ.get("CLAUDE_CONFIG_DIR", Path.home() / ".claude"))
+    status_file = config / "sessions" / f"{pid}.json"
+    (adir / "watcher").write_text(str(os.getpid()))
+    while Path(f"/proc/{pid}").exists() and pending.exists() and not marker.exists():
+        time.sleep(15)
+        try:
+            idle = json.loads(status_file.read_text()).get("status") == "idle"
+        except (OSError, ValueError):
+            idle = False
+        if idle and pending.exists() and not background_work(pid, transcript_path):
+            pending.rename(marker)
+            os.kill(pid, signal.SIGTERM)
+            return
+
+
+def watcher_running(adir):
+    try:
+        return Path(f"/proc/{(Path(adir) / 'watcher').read_text().strip()}").exists()
+    except OSError:
+        return False
+
+
 def launch(profile):
     print(dict(CLAUDE_PROFILES)[profile])
     for arg in CLAUDE_ARGS:
@@ -170,6 +200,7 @@ def hook():
         if pct < THRESHOLD and not os.environ.get(
             "CLAUDE_AUTO_FORCE"
         ):  # FORCE: testing only
+            Path(os.environ["CLAUDE_AUTO_DIR"], "pending").unlink(missing_ok=True)
             return
         reason = f"{current} at {pct:.0f}%"
     nxt = next_profile(accs, current, model)
@@ -185,14 +216,26 @@ def hook():
     pid = claude_pid()
     if pid is None:
         return
-    busy = background_work(pid, event.get("transcript_path", ""))
+    adir = os.environ["CLAUDE_AUTO_DIR"]
+    cut = "cut" if event.get("hook_event_name") == "StopFailure" else "done"
+    line = f"{event['session_id']} {nxt} {model or '-'} {cut} {reason}\n"
+    transcript = event.get("transcript_path", "")
+    busy = background_work(pid, transcript)
     if busy:
-        msg = f"{reason} — not switching to {nxt} yet: {busy} is still running. It will switch at the first reply after that finishes."
+        Path(adir, "pending").write_text(line)
+        if not watcher_running(adir):
+            subprocess.Popen(
+                [sys.executable, __file__, "watch", str(pid), transcript],
+                start_new_session=True,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        msg = f"{reason} — not switching to {nxt} yet: {busy} is still running. It will switch once that finishes and the chat is idle."
         print(json.dumps({"systemMessage": msg}))
         return
-    with open(os.path.join(os.environ["CLAUDE_AUTO_DIR"], "switch"), "w") as f:
-        cut = "cut" if event.get("hook_event_name") == "StopFailure" else "done"
-        f.write(f"{event['session_id']} {nxt} {model or '-'} {cut} {reason}\n")
+    Path(adir, "pending").unlink(missing_ok=True)
+    Path(adir, "switch").write_text(line)
     # Kill after this hook returns so Claude finishes the turn bookkeeping first.
     subprocess.Popen(
         ["sh", "-c", f"sleep 2; kill -TERM {pid}"],
@@ -205,4 +248,4 @@ def hook():
 
 
 if __name__ == "__main__":
-    {"start": start, "launch": launch, "hook": hook}[sys.argv[1]](*sys.argv[2:])
+    {"start": start, "launch": launch, "hook": hook, "watch": watch}[sys.argv[1]](*sys.argv[2:])
